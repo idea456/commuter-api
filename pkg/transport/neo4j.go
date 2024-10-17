@@ -19,7 +19,7 @@ type Neo4JClient struct {
 func NewNeo4JClient(ctx context.Context) (*Neo4JClient, error) {
 	dbUri := "neo4j://localhost:7687"
 	dbUser := "neo4j"
-	dbPassword := "12345678"
+	dbPassword := "Abcd1234"
 
 	driver, err := neo4j.NewDriverWithContext(
 		dbUri,
@@ -60,10 +60,12 @@ func (c *Neo4JClient) GetNearestStops(ctx context.Context, coor models.Coordinat
 	for _, record := range results.Records {
 		row, _ := record.Get("s")
 		node := row.(dbtype.Node)
-		stop := node.GetProperties()["name"]
+		stop := node.GetProperties()
 		// fmt.Println(node.GetProperties()["name"])
 		stops = append(stops, models.Stop{
-			Name: stop.(string),
+			Name:      stop["name"].(string),
+			Latitude:  stop["latitude"].(float64),
+			Longitude: stop["longitude"].(float64),
 		})
 	}
 

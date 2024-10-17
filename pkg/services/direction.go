@@ -38,8 +38,6 @@ func (svc *DirectionService) GetDirections(origin models.Coordinate, destination
 		transportModes = "[\"WALK\", \"TRANSIT\"]"
 	}
 
-	fmt.Println(transportModes)
-
 	query := fmt.Sprintf(`
 		{
 		plan(
@@ -83,7 +81,6 @@ func (svc *DirectionService) GetDirections(origin models.Coordinate, destination
 	`, origin.Latitude, origin.Longitude, destination.Latitude, destination.Longitude, options.WalkReluctance, transportModes)
 
 	fmt.Println(query)
-
 	response, err := svc.graphqlClient.Query(query)
 	if err != nil {
 		log.Fatal("cant get directions", err)

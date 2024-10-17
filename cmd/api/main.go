@@ -54,6 +54,10 @@ func seed() {
 	}
 }
 
+// func rateLimiter(next func(w http.ResponseWriter, r *http.Request) http.Handler {
+// 	limiter := rate.NewLimiter(20, 4)
+// })
+
 func main() {
 	// seed()
 	mux := http.NewServeMux()

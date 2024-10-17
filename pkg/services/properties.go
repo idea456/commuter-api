@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
@@ -17,6 +19,27 @@ import (
 type PropertyService struct {
 	MongoDBClient *transport.MongoDBClient
 	Neo4JClient   *transport.Neo4JClient
+}
+
+type NearbyEdge struct {
+	WalkDistance float64 `json:"walk_distance"`
+	WalkTime     float64 `json:"walk_time"`
+}
+
+type TransferRange struct {
+	MinTransfer int `json:"min_transfer"`
+	MaxTranfer  int `json:"max_transfer"`
+}
+
+type FindTransitablePropertiesOptions struct {
+	Range        TransferRange     `json:"transfer_range"`
+	Origin       models.Coordinate `json:"origin"`
+	WalkDistance int               `json:"walk_distance"`
+}
+
+type FindTransitablePropertiesByStop struct {
+	Stop  models.Stop   `json:"stop"`
+	Range TransferRange `json:"transfer_range"`
 }
 
 type FindNearestPropertiesResult struct {
@@ -135,25 +158,29 @@ func (svc *PropertyService) FindNearestProperties(origin models.Coordinate, filt
 	return nearestProperties, nil
 }
 
-func (svc *PropertyService) FindTransitableProperties(ctx context.Context, origin models.Coordinate) ([]models.Property, error) {
-	nearestStops, err := svc.FindWalkableStationsByOrigin(ctx, origin)
+func (svc *PropertyService) FindTransitableProperties(ctx context.Context, options FindTransitablePropertiesOptions) ([]models.TransitableProperty, error) {
+	nearestStops, err := svc.FindWalkableStationsByOrigin(ctx, options.Origin, options.WalkDistance)
 	if err != nil {
 		return nil, err
 	}
 
-	properties := make([]models.Property, 0)
+	properties := make([]models.TransitableProperty, 0)
 	checkedProperties := make(map[string]string)
 	for _, nearestStop := range nearestStops {
-		transitableProperties, err := svc.FindTransitablePropertiesByStation(ctx, origin, nearestStop)
+		transitableProperties, err := svc.FindTransitablePropertiesByStop(ctx, FindTransitablePropertiesByStop{
+			Stop:  nearestStop,
+			Range: options.Range,
+		})
+
 		if err != nil {
 			return nil, err
 		}
 
 		// TODO: Can do checks like price here, or update Query filter
 		for _, transitableProperty := range transitableProperties {
-			if _, exists := checkedProperties[transitableProperty.Name]; !exists {
+			if _, exists := checkedProperties[transitableProperty.Property.Name]; !exists {
 				properties = append(properties, transitableProperty)
-				checkedProperties[transitableProperty.Name] = transitableProperty.Name
+				checkedProperties[transitableProperty.Property.Name] = transitableProperty.Property.Name
 			}
 		}
 	}
@@ -161,43 +188,92 @@ func (svc *PropertyService) FindTransitableProperties(ctx context.Context, origi
 	return properties, nil
 }
 
-func (svc *PropertyService) FindTransitablePropertiesByStation(ctx context.Context, origin models.Coordinate, station models.Stop) ([]models.Property, error) {
-	// SEARCH_DEPTH := 2
-	query := "MATCH (p:Stop {name: $name})-[route*1..2]-(nearby) RETURN p, nearby;"
+func calculateScore(depth int, walkDistanceToStation float64) float64 {
+	// TODO: get depth weight
+	return walkDistanceToStation * float64(depth)
+}
+
+func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context, options FindTransitablePropertiesByStop) ([]models.TransitableProperty, error) {
+	query := fmt.Sprintf("MATCH (p:Stop {name: $name})-[routes*%d..%d]-(nearby:Property) RETURN p, nearby, routes, SIZE(routes) AS depth;", options.Range.MinTransfer, options.Range.MaxTranfer)
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
-		"name": station.Name,
-		// "depth": SEARCH_DEPTH,
+		"name": options.Stop.Name,
 	}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
 	if err != nil {
 		slog.Error(err.Error())
 		return nil, err
 	}
 
-	properties := make([]models.Property, 0)
+	propertiesMap := make(map[string]models.TransitableProperty)
+	// properties := make([]models.TransitableProperty, 0)
+
 	for _, record := range results.Records {
+		depthProp, _ := record.Get("depth")
+		depth := int(depthProp.(int64))
+		var score float64 = 9999999
+		var walkDistance float64 = 9999999
+		routesProp, exists := record.Get("routes")
+		if !exists {
+			slog.Error("nothing")
+			continue
+		}
+		routes := routesProp.([]interface{})
+		for _, route := range routes {
+			castedRoute := route.(dbtype.Relationship)
+			if castedRoute.Type == "NEARBY" {
+				routeParameters := castedRoute.GetProperties()
+				walkDistance = routeParameters["walk_distance"].(float64)
+				score = min(calculateScore(depth, walkDistance), score)
+			}
+		}
+
 		row, _ := record.Get("nearby")
 		node := row.(dbtype.Node)
 		labels := node.Labels
 		if slices.Contains(labels, "Property") {
-			property := node.GetProperties()["name"]
-			coordinates := node.GetProperties()["coordinates"].([]any)
+			parameters := node.GetProperties()
+			property := parameters["name"]
+			elementId := node.GetElementId()
+			coordinates := parameters["coordinates"].([]any)
 
 			latitude := coordinates[0].(float64)
 			longitude := coordinates[1].(float64)
 
-			properties = append(properties, models.Property{
-				Id:       node.GetProperties()["id"].(string),
-				Name:     property.(string),
-				District: node.GetProperties()["district"].(string),
-				Address:  node.GetProperties()["address"].(string),
-				Coordinates: models.Coordinate{
-					Latitude:  latitude,
-					Longitude: longitude,
-				},
-			})
+			if _, exists := propertiesMap[elementId]; !exists {
+				transitableProperty := models.Property{
+					Id:       parameters["property_id"].(string),
+					Name:     property.(string),
+					Region:   parameters["region"].(string),
+					District: parameters["district"].(string),
+					Address:  parameters["address"].(string),
+					Type:     parameters["type"].(string),
+					Coordinates: models.Coordinate{
+						Latitude:  latitude,
+						Longitude: longitude,
+					},
+				}
+				propertiesMap[elementId] = models.TransitableProperty{
+					Property:                  transitableProperty,
+					Score:                     score,
+					WalkDistanceToNearestStop: walkDistance,
+					Depth:                     depth,
+					NearestStop:               options.Stop,
+				}
+			} else {
+				transitableProperty := propertiesMap[elementId]
+				if score < transitableProperty.Score {
+					fmt.Println(property, score)
+					transitableProperty.Score = score
+				}
+				// transitableProperty.Score = min(transitableProperty.Score, score)
+			}
+			// properties = append(properties, models.TransitableProperty{
+			// 	Property: transitableProperty,
+			// })
 		}
 	}
+	properties := slices.Collect(maps.Values(propertiesMap))
+
 	return properties, nil
 }
 
@@ -237,14 +313,13 @@ func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, 
 	return properties, nil
 }
 
-func (svc *PropertyService) FindWalkableStationsByOrigin(ctx context.Context, origin models.Coordinate) ([]models.Stop, error) {
-	MAX_WALKABLE_DISTANCE := 1000
+func (svc *PropertyService) FindWalkableStationsByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int) ([]models.Stop, error) {
 	query := "MATCH (p:Stop) WHERE point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) < $maxWalkableDistance RETURN p"
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
 		"latitude":            origin.Latitude,
 		"longitude":           origin.Longitude,
-		"maxWalkableDistance": MAX_WALKABLE_DISTANCE,
+		"maxWalkableDistance": maxWalkDistance,
 	}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
 	if err != nil {
 		slog.Error(err.Error())

@@ -140,7 +140,7 @@ func (g *SeedGenerator) GenerateProperties() error {
 
 	fmt.Println("CREATE")
 	for _, property := range properties {
-		fmt.Printf("(:Property {id: \"%s\", name: \"%s\", address: \"%s\", link: \"%s\", district: \"%s\", priceRange: [0, 0, 0, 0, 0], coordinates: [%f, %f], location: point({latitude: %f, longitude: %f})}),\n", property.Id, property.Name, property.Address, property.Link, property.District, property.Coordinates.Latitude, property.Coordinates.Longitude, property.Coordinates.Latitude, property.Coordinates.Longitude)
+		fmt.Printf("(:Property {id: \"%s\", name: \"%s\", type: \"%s\", address: \"%s\", link: \"%s\", district: \"%s\", coordinates: [%f, %f], location: point({latitude: %f, longitude: %f})}),\n", property.Id, property.Name, property.Type, property.Address, property.Link, property.District, property.Coordinates.Latitude, property.Coordinates.Longitude, property.Coordinates.Latitude, property.Coordinates.Longitude)
 	}
 
 	return nil
