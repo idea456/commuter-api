@@ -167,8 +167,12 @@ func nodeToStop(node dbtype.Node) models.Stop {
 	parameters := node.GetProperties()
 	elementId := node.GetElementId()
 	stopName := parameters["name"].(string)
-	if castedDisplayName, ok := parameters["display_name"].(string); ok {
-		displayName := castedDisplayName
+
+	var displayName string
+	if castedDisplayName, ok := parameters["display_name"].([]string); ok {
+		displayName = castedDisplayName[0]
+	} else {
+		displayName = parameters["display_name"].(string)
 	}
 	prefixDuration := parameters["prefix_duration"].(int64)
 	suffixDuration := parameters["suffix_duration"].(int64)
