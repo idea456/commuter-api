@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 
@@ -22,7 +21,6 @@ func NewRedisClient() (*RedisClient, error) {
 	if uri == "" {
 		return nil, errors.New("Redis URL not specified in environment variable")
 	}
-	fmt.Println(uri)
 	if redisClient == nil {
 		options := &redis.Options{
 			Addr:     uri,
@@ -82,7 +80,6 @@ func (client *RedisClient) ReadStream(consumer *chan interface{}) {
 
 	for _, stream := range streams {
 		for _, message := range stream.Messages {
-			fmt.Println(message.ID)
 			*consumer <- message
 		}
 	}

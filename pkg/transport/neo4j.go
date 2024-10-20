@@ -86,7 +86,6 @@ func (c *Neo4JClient) GetBestPropertiesToStop(ctx context.Context, stop models.S
 
 	properties := make([]models.Property, 0)
 	for _, record := range results.Records {
-		fmt.Println(record)
 		row, _ := record.Get("nearby")
 		node := row.(dbtype.Node)
 		labels := node.Labels

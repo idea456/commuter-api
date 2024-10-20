@@ -28,7 +28,6 @@ type Property struct {
 type TransitableProperty struct {
 	Property                  Property `json:"property"`
 	Score                     float64  `json:"score"`
-	Depth                     int      `json:"depth"`
 	WalkDistanceToNearestStop float64  `json:"walk_distance_nearest_stop"`
 	NearestStop               Stop     `json:"nearest_stop"`
 }

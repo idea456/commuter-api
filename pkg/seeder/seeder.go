@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/idea456/commuter-api/pkg/models"
 	"github.com/idea456/commuter-api/pkg/services"
@@ -49,34 +51,99 @@ func (g *Seeder) SeedStops(ctx context.Context) error {
 	existsMap := make(map[string]bool)
 
 	for i, row := range data {
+		// Skip header
 		if i > 0 {
 			stopName := strings.Replace(strings.Trim(row[9], " "), " ", "_", -1)
 			stopName = strings.Replace(stopName, "'", "", -1)
 			stopName = strings.Replace(stopName, "-", "_", -1)
-			_, exists := existsMap[stopName]
-			if !exists {
-				query := "CREATE (:Stop {stop_id: $stop_id, name: $name, latitude: $latitude, longitude: $longitude, location: point({latitude: $latitude, longitude: $longitude})});"
 
-				latitude, _ := strconv.ParseFloat(row[2], 64)
-				longitude, _ := strconv.ParseFloat(row[3], 64)
+			query := "CREATE (:Stop {stop_id: $stop_id, name: $name, display_name: $display_name, prefix_duration: $prefix_duration, suffix_duration: $suffix_duration, latitude: $latitude, longitude: $longitude, location: point({latitude: $latitude, longitude: $longitude})});"
 
-				_, err := neo4j.ExecuteQuery(ctx, g.client.Client, query, map[string]any{
-					"stop_id":   row[0],
-					"name":      row[9],
-					"latitude":  latitude,
-					"longitude": longitude,
-				}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
-				if err != nil {
-					slog.Error(fmt.Sprintf("unable to seed %s: %v", stopName, err))
-					continue
-				}
-				existsMap[stopName] = true
+			latitude, _ := strconv.ParseFloat(row[2], 64)
+			longitude, _ := strconv.ParseFloat(row[3], 64)
+
+			_, err := neo4j.ExecuteQuery(ctx, g.client.Client, query, map[string]any{
+				"stop_id":         row[0],
+				"display_name":    row[9],
+				"name":            row[1],
+				"latitude":        latitude,
+				"longitude":       longitude,
+				"prefix_duration": "",
+				"suffix_duration": "",
+			}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
+			if err != nil {
+				slog.Error(fmt.Sprintf("unable to seed %s: %v", stopName, err))
+				continue
 			}
+			existsMap[stopName] = true
+
 		}
 	}
 
 	return nil
 }
+
+func (g *Seeder) MergeSimilarStops(ctx context.Context) {
+	file, err := os.Open("pkg/static/gtfs_rapid_rail_kl/stops.txt")
+	if err != nil {
+		slog.Error(err.Error())
+		return
+	}
+	defer file.Close()
+
+	r := csv.NewReader(file)
+	data, err := r.ReadAll()
+	if err != nil {
+		slog.Error(err.Error())
+		return
+	}
+
+	mapping := make(map[string][]models.Stop)
+
+	for i, row := range data {
+		if i > 0 {
+			name := row[1]
+			stop := models.Stop{
+				Id:          row[0],
+				DisplayName: row[9],
+				Name:        row[1],
+			}
+			if _, exists := mapping[name]; exists {
+				mapping[name] = append(mapping[name], stop)
+			} else {
+				mapping[name] = []models.Stop{stop}
+			}
+		}
+	}
+
+	for _, stops := range mapping {
+		if len(stops) > 1 {
+			query := "MATCH "
+			variables := ""
+			parameters := make(map[string]any)
+			for i, stop := range stops {
+				parameters[fmt.Sprintf("stop_id_%d", i)] = stop.Id
+				if i < len(stops)-1 {
+					query += fmt.Sprintf("(p%d:Stop {stop_id: $stop_id_%d}), ", i, i)
+					variables += fmt.Sprintf("p%d,", i)
+				} else {
+					query += fmt.Sprintf("(p%d:Stop {stop_id: $stop_id_%d})", i, i)
+					variables += fmt.Sprintf("p%d", i)
+				}
+			}
+			variables = fmt.Sprintf("[%s]", variables)
+			query = fmt.Sprintf("%s WITH head(collect(%s)) as nodes CALL apoc.refactor.mergeNodes(nodes,{properties:{ name: 'discard', latitude: 'discard', longitude: 'discard', location: 'discard', walk_time: 'discard', walk_distance: 'discard', `.*`: \"combine\" }, mergeRels:true}) YIELD node RETURN node;", query, variables)
+
+			_, err = neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
+			if err != nil {
+				slog.Error(fmt.Sprintf("unable to merge stops: %v", err))
+				continue
+			}
+		}
+	}
+}
+
+func computeTransfers() {}
 
 func getStopNameMapping() (map[string]string, error) {
 	file, err := os.Open("pkg/static/gtfs_rapid_rail_kl/stops.txt")
@@ -116,6 +183,16 @@ func filterWeekendTrips(stopTimes [][]string) (filteredStopTimes [][]string) {
 	return filteredStopTimes
 }
 
+func strToTime(timeString string) (time.Time, error) {
+	layout := "15:04:05"
+	t, err := time.Parse(layout, timeString)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t, nil
+}
+
+// route_id,direction_id,trip_id,arrival_time,departure_time,stop_id,stop_sequence
 func (g *Seeder) SeedTrips(ctx context.Context) error {
 	file, _ := os.Open("pkg/static/gtfs_rapid_rail_kl/stop_times.txt")
 	defer file.Close()
@@ -125,16 +202,48 @@ func (g *Seeder) SeedTrips(ctx context.Context) error {
 
 	data = filterWeekendTrips(data)
 
+	// Prefix/Suffix duration is used to calculate how much duration in seconds  it will take to reach to a particular stop from the very first stop
+	// This is gonna be used fo
+	var prefixDuration int
+	var suffixDuration int
+	var duration int
+	var previousArrivalTime time.Time
 	var currentRoute string
-	// fmt.Println("CREATE")
 	for i, row := range data {
-		if currentRoute == "" {
-			currentRoute = row[0]
-		} else if currentRoute != row[0] {
+		if currentRoute == "" || currentRoute != row[0] {
 			currentRoute = row[0]
 		}
 
-		// currentTrip := row[2]
+		stopSequence, err := strconv.Atoi(data[i][6])
+		if err != nil {
+			log.Fatal(fmt.Errorf("could not convert %s to integer: %w", data[i][6], err))
+		}
+		directionId, err := strconv.Atoi(data[i][1])
+		if err != nil {
+			log.Fatal(fmt.Errorf("could not convert directionId %s to integer: %w", data[i][6], err))
+		}
+
+		arrivalTime, err := strToTime(data[i][3])
+		if err != nil {
+			log.Fatal(fmt.Errorf("could not parse %s to time: %v", data[i][3], err))
+		}
+
+		if stopSequence == 1 {
+			if directionId == 0 {
+				prefixDuration = 0 // First stop doesn't have prefix duration, since its literally the first stop
+			} else {
+				suffixDuration = 0
+			}
+		} else {
+			duration = int(arrivalTime.Sub(previousArrivalTime).Seconds())
+			if directionId == 0 {
+				prefixDuration += duration
+			} else {
+				suffixDuration += duration
+			}
+		}
+		previousArrivalTime = arrivalTime
+
 		var nextStop string
 		if i < len(data)-1 && data[i+1][0] == currentRoute {
 			nextStop = data[i+1][5]
@@ -142,8 +251,28 @@ func (g *Seeder) SeedTrips(ctx context.Context) error {
 
 		currentStop := row[5]
 		var query string
+		var parameters map[string]any
+
+		if directionId == 0 {
+			query = "MATCH (s:Stop {stop_id:$start_stop}) SET s.prefix_duration=$prefix_duration;"
+			parameters = map[string]any{
+				"start_stop":      currentStop,
+				"prefix_duration": prefixDuration,
+			}
+		} else {
+			query = "MATCH (s:Stop {stop_id:$start_stop}) SET s.suffix_duration=$suffix_duration;"
+			parameters = map[string]any{
+				"start_stop":      currentStop,
+				"suffix_duration": suffixDuration,
+			}
+		}
+		_, err = neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
+		if err != nil {
+			slog.Error(fmt.Sprintf("unable to set prefix/suffix duration for stop %s: %v", currentStop, err))
+			continue
+		}
+
 		if i > 0 && nextStop != "" && currentStop != nextStop {
-			duration, _ := strconv.Atoi(row[8])
 			var parameters map[string]any
 			query = "MATCH (s:Stop {stop_id:$start_stop}), (t:Stop {stop_id:$end_stop}) CREATE (s)-[:ROUTE {route_id: $route_id, direction_id: $direction_id, trip_id: $trip_id, name: $route_name, duration: $duration}]->(t);"
 			parameters = map[string]any{
@@ -233,7 +362,6 @@ func (g *Seeder) SeedNearbyStops(ctx context.Context, distance int) error {
 			})
 
 			if len(directions.Itineraries) == 0 {
-				fmt.Println(nearestStop.Latitude, nearestStop.Longitude)
 				slog.Info(fmt.Sprintf("No directions found between stop %s to property %s...", nearestStop.Name, property.Name))
 				continue
 			}
