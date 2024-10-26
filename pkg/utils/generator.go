@@ -35,9 +35,6 @@ func (g *SeedGenerator) GenerateStops() error {
 	existsMap := make(map[string]bool)
 
 	for i, row := range data {
-		// for _, col := range row {
-		// 	fmt.Printf(",", col)
-		// }
 		if i > 0 {
 			stopName := strings.Replace(strings.Trim(row[9], " "), " ", "_", -1)
 			stopName = strings.Replace(stopName, "'", "", -1)
@@ -47,9 +44,6 @@ func (g *SeedGenerator) GenerateStops() error {
 				fmt.Printf("(%s:Stop {name: '%s', location: point({latitude: %s, longitude: %s})}),\n", stopName, stopName, row[2], row[3])
 				existsMap[stopName] = true
 			}
-			// stopName = fmt.Sprintf("%s_%s", stopName, row[0])
-			// fmt.Printf("CREATE (%s: Stop {id: '%s', name: '%s', longitude: %s, latitude: %s })\n", row[0], row[0], stopName, row[3], row[2])
-			// fmt.Printf("CREATE (%s:Stop)\nSET %s.name ='%s',\n%s.location = point({latitude: %s, longitude: %s})\nRETURN %s\n", stopName, stopName, stopName, stopName, row[2], row[3], stopName)
 		}
 	}
 

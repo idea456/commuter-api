@@ -104,7 +104,7 @@ func (g *Seeder) MergeSimilarStops(ctx context.Context) {
 		if i > 0 {
 			name := row[1]
 			stop := models.Stop{
-				Id:          row[0],
+				Id:          []string{row[0]},
 				DisplayName: row[9],
 				Name:        row[1],
 			}
@@ -257,13 +257,13 @@ func (g *Seeder) SeedTrips(ctx context.Context) error {
 			query = "MATCH (s:Stop {stop_id:$start_stop}) SET s.prefix_duration=$prefix_duration;"
 			parameters = map[string]any{
 				"start_stop":      currentStop,
-				"prefix_duration": prefixDuration,
+				"prefix_duration": []int{prefixDuration},
 			}
 		} else {
 			query = "MATCH (s:Stop {stop_id:$start_stop}) SET s.suffix_duration=$suffix_duration;"
 			parameters = map[string]any{
 				"start_stop":      currentStop,
-				"suffix_duration": suffixDuration,
+				"suffix_duration": []int{suffixDuration},
 			}
 		}
 		_, err = neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))

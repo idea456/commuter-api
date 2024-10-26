@@ -174,22 +174,56 @@ func nodeToStop(node dbtype.Node) models.Stop {
 	} else {
 		displayName = parameters["display_name"].(string)
 	}
-	prefixDuration := parameters["prefix_duration"].(int64)
-	suffixDuration := parameters["suffix_duration"].(int64)
+	prefixDuration := parameters["prefix_duration"].([]interface{})
+	prefixDurationCasted := make([]int, 0)
+	for _, duration := range prefixDuration {
+		durationCasted := int(duration.(int64))
+		prefixDurationCasted = append(prefixDurationCasted, durationCasted)
+	}
+	suffixDuration := parameters["suffix_duration"].([]interface{})
+	suffixDurationCasted := make([]int, 0)
+	for _, duration := range suffixDuration {
+		durationCasted := int(duration.(int64))
+		suffixDurationCasted = append(suffixDurationCasted, durationCasted)
+	}
 	latitude := parameters["latitude"].(float64)
 	longitude := parameters["longitude"].(float64)
 	stop := models.Stop{
 		ElementId:      elementId,
 		Name:           stopName,
 		DisplayName:    displayName,
-		PrefixDuration: int(prefixDuration),
-		SuffixDuration: int(suffixDuration),
+		PrefixDuration: prefixDurationCasted,
+		SuffixDuration: suffixDurationCasted,
 		Coordinate: models.Coordinate{
 			Latitude:  latitude,
 			Longitude: longitude,
 		},
 	}
 	return stop
+}
+
+func nodeToProperty(node dbtype.Node) models.Property {
+	parameters := node.GetProperties()
+	propertyName := parameters["name"]
+	coordinates := parameters["coordinates"].([]any)
+
+	latitude := coordinates[0].(float64)
+	longitude := coordinates[1].(float64)
+
+	property := models.Property{
+		Id:       parameters["property_id"].(string),
+		Name:     propertyName.(string),
+		Region:   parameters["region"].(string),
+		District: parameters["district"].(string),
+		Address:  parameters["address"].(string),
+		Type:     parameters["type"].(string),
+		Coordinates: models.Coordinate{
+			Latitude:  latitude,
+			Longitude: longitude,
+		},
+	}
+
+	return property
 }
 
 func (svc *PropertyService) FindTransitableProperties(ctx context.Context, options FindTransitablePropertiesOptions) ([]models.TransitableProperty, error) {
@@ -224,17 +258,17 @@ func (svc *PropertyService) FindTransitableProperties(ctx context.Context, optio
 
 func calculateScore(originStop models.Stop, commutingStop models.Stop, walkDistanceToOriginStop float64, walkDistanceToCommutingStop float64) float64 {
 	var commuteDuration int
-	if originStop.PrefixDuration > commutingStop.PrefixDuration {
-		commuteDuration = originStop.PrefixDuration - commutingStop.PrefixDuration
+	if originStop.PrefixDuration[0] > commutingStop.PrefixDuration[0] {
+		commuteDuration = originStop.PrefixDuration[0] - commutingStop.PrefixDuration[0]
 	} else {
-		commuteDuration = originStop.SuffixDuration - commutingStop.SuffixDuration
+		commuteDuration = originStop.SuffixDuration[0] - commutingStop.SuffixDuration[0]
 	}
 
 	return walkDistanceToOriginStop + walkDistanceToCommutingStop + float64(commuteDuration)
 }
 
 func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context, options FindTransitablePropertiesByStop) ([]models.TransitableProperty, error) {
-	query := fmt.Sprintf("MATCH (p:Stop {name: $name})-[routes*%d..%d]-(nearby:Property) RETURN p, nearby, routes;", options.Range.MinTransfer, options.Range.MaxTranfer)
+	query := fmt.Sprintf("MATCH (p:Stop {name: $name})<-[routes*%d..%d]-(nearby) RETURN p, nearby, routes;", options.Range.MinTransfer, options.Range.MaxTranfer)
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
 		"name": options.WalkableStop.Stop.Name,
@@ -250,55 +284,21 @@ func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context,
 		row, _ := record.Get("nearby")
 		node := row.(dbtype.Node)
 		labels := node.Labels
-		parameters := node.GetProperties()
 		elementId := node.GetElementId()
 		if slices.Contains(labels, "Property") {
 			if _, exists := propertiesMap[elementId]; !exists {
-				propertyName := parameters["name"]
-				coordinates := parameters["coordinates"].([]any)
-
-				latitude := coordinates[0].(float64)
-				longitude := coordinates[1].(float64)
-
-				transitableProperty := models.Property{
-					Id:       parameters["property_id"].(string),
-					Name:     propertyName.(string),
-					Region:   parameters["region"].(string),
-					District: parameters["district"].(string),
-					Address:  parameters["address"].(string),
-					Type:     parameters["type"].(string),
-					Coordinates: models.Coordinate{
-						Latitude:  latitude,
-						Longitude: longitude,
-					},
-				}
+				transitableProperty := nodeToProperty(node)
 				propertiesMap[elementId] = models.TransitableProperty{
 					Property: transitableProperty,
 				}
 			}
 		} else if slices.Contains(labels, "Stop") {
-			row, _ = record.Get("p")
-			node = row.(dbtype.Node)
-			elementId = node.GetElementId()
-			if _, exists := stopsMap[elementId]; !exists {
-				stop := nodeToStop(node)
-				stopsMap[elementId] = stop
-			}
-		}
-
-		row, _ = record.Get("p")
-		node = row.(dbtype.Node)
-		labels = node.Labels
-		elementId = node.GetElementId()
-		if slices.Contains(labels, "Stop") {
 			if _, exists := stopsMap[elementId]; !exists {
 				stop := nodeToStop(node)
 				stopsMap[elementId] = stop
 			}
 		}
 	}
-
-	fmt.Println(stopsMap)
 
 	// Calculate scores for each property
 	for _, record := range results.Records {
@@ -316,85 +316,22 @@ func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context,
 					parameters := rel.GetProperties()
 					walkTimeToCommutingStop := parameters["walk_distance"].(float64)
 					score := calculateScore(options.WalkableStop.Stop, nearestStopToProperty, options.WalkableStop.WalkDistance, walkTimeToCommutingStop)
-					fmt.Printf("%s: %f\n", transitableProperty.Property.Name, score)
+					transitableProperty.Score = score
+					propertiesMap[rel.StartElementId] = transitableProperty
 				} else {
-					slog.Info("stop not found")
+					// slog.Info("stop not found")
 				}
 			}
 
 		}
 	}
 
-	return slices.Collect(maps.Values(propertiesMap)), nil
+	properties := maps.Values(propertiesMap)
+	sortedByScore := slices.SortedFunc(properties, func(prop1, prop2 models.TransitableProperty) int {
+		return int(prop1.Score) - int(prop2.Score)
+	})
 
-	// properties := make([]models.TransitableProperty, 0)
-
-	// for _, record := range results.Records {
-	// 	var score float64 = 9999999
-	// 	var walkDistance float64 = 9999999
-	// 	routesProp, exists := record.Get("routes")
-	// 	if !exists {
-	// 		slog.Error("nothing")
-	// 		continue
-	// 	}
-	// 	routes := routesProp.([]interface{})
-	// 	for _, route := range routes {
-	// 		castedRoute := route.(dbtype.Relationship)
-	// 		if castedRoute.Type == "NEARBY" {
-	// 			routeParameters := castedRoute.GetProperties()
-	// 			walkDistance = routeParameters["walk_distance"].(float64)
-	// 			score = min(calculateScore(options.Stop, walkDistance), score)
-	// 		}
-	// 	}
-
-	// 	row, _ := record.Get("nearby")
-	// 	node := row.(dbtype.Node)
-	// 	labels := node.Labels
-	// 	if slices.Contains(labels, "Property") {
-	// 		parameters := node.GetProperties()
-	// 		property := parameters["name"]
-	// 		elementId := node.GetElementId()
-	// 		coordinates := parameters["coordinates"].([]any)
-
-	// 		latitude := coordinates[0].(float64)
-	// 		longitude := coordinates[1].(float64)
-
-	// 		if _, exists := propertiesMap[elementId]; !exists {
-	// 			transitableProperty := models.Property{
-	// 				Id:       parameters["property_id"].(string),
-	// 				Name:     property.(string),
-	// 				Region:   parameters["region"].(string),
-	// 				District: parameters["district"].(string),
-	// 				Address:  parameters["address"].(string),
-	// 				Type:     parameters["type"].(string),
-	// 				Coordinates: models.Coordinate{
-	// 					Latitude:  latitude,
-	// 					Longitude: longitude,
-	// 				},
-	// 			}
-	// 			propertiesMap[elementId] = models.TransitableProperty{
-	// 				Property:                  transitableProperty,
-	// 				Score:                     score,
-	// 				WalkDistanceToNearestStop: walkDistance,
-	// 				Depth:                     depth,
-	// 				NearestStop:               options.Stop,
-	// 			}
-	// 		} else {
-	// 			transitableProperty := propertiesMap[elementId]
-	// 			if score < transitableProperty.Score {
-	// 				fmt.Println(property, score)
-	// 				transitableProperty.Score = score
-	// 			}
-	// 			// transitableProperty.Score = min(transitableProperty.Score, score)
-	// 		}
-	// 		// properties = append(properties, models.TransitableProperty{
-	// 		// 	Property: transitableProperty,
-	// 		// })
-	// 	}
-	// }
-	// properties := slices.Collect(maps.Values(propertiesMap))
-
-	// return properties, nil
+	return sortedByScore, nil
 }
 
 func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate) ([]models.Property, error) {
@@ -434,7 +371,7 @@ func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, 
 }
 
 func (svc *PropertyService) FindWalkableStationsByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int) ([]WalkableStop, error) {
-	query := "MATCH (p:Stop) WITH point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) as dist, p WHERE dist < $maxWalkableDistance RETURN p"
+	query := "MATCH (p:Stop) WITH point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) as dist, p WHERE dist < $maxWalkableDistance RETURN p, dist"
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
 		"latitude":            origin.Latitude,

@@ -53,7 +53,6 @@ func (svc *DirectionService) GetDirections(origin models.Coordinate, destination
 				walkTime
 				walkDistance
 				waitingTime
-				generalizedCost
 				legs {
 					mode
 					transitLeg
