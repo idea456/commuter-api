@@ -1,36 +1,45 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/idea456/commuter-api/pkg/controllers"
+	"github.com/rs/cors"
 )
+
+func health(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+
+
+// func rateLimiter(next func(w http.ResponseWriter, r *http.Request) http.Handler {
+// 	limiter := rate.NewLimiter(20, 4)
+// })
+
+func init() {}
 
 func main() {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/health", health)
+	propertiesController := controllers.NewPropertiesController()
+	mux.HandleFunc("/properties/nearest/walkable", propertiesController.GetWalkableProperties)
+	mux.HandleFunc("/properties/nearest/transit", propertiesController.GetTransitableProperties)
+	mux.HandleFunc("/properties/([^/]+)", propertiesController.GetProperty)
 
-	// properties, err := utils.LoadPropertiesJSON()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	directionsController, err := controllers.NewDirectionsController()
+	if err != nil {
+		log.Fatalf("there was an error in initialising the directions service: %v", err)
+		return
+	}
+	mux.HandleFunc("/directions", directionsController.GetDirections)
 
-	// db := transport.NewDynamoDBClient()
+	handler := cors.Default().Handler(mux)
 
-	// for _, property := range properties {
-	// 	if property.Name != "" {
-	// 		property.PropertyId = property.Name
-	// 		property.CellId = utils.ToCell(property.Coordinates).String()
-
-	// 		_, err := db.PutItem("properties", property)
-	// 		if err != nil {
-	// 			log.Fatal(err)
-	// 		}
-	// 		fmt.Println(fmt.Sprintf("Inserted %s : ", property.PropertyId))
-	// 	}
-	// }
-
-	// db := transport.NewDynamoDBClient()
-
-	err := http.ListenAndServe(":4000", mux)
+	fmt.Println("Listening at port 4001...")
+	err = http.ListenAndServe(":4001", handler)
 	if err != nil {
 		log.Fatal(err)
 	}
