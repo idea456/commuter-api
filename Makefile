@@ -1,3 +1,6 @@
+build:
+	CGO_ENABLEd=0 GOOS=linux go build -o /var/commuter-api ./cmd/api/main.go
+
 dev-cluster:
 	kind create cluster --config=manifests/cluster.dev.yml
 

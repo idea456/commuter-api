@@ -348,13 +348,12 @@ func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context,
 }
 
 func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int) ([]models.Property, error) {
-	MAX_WALKABLE_DISTANCE := 1000
 	query := "MATCH (p:Property) WHERE point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) < $maxWalkableDistance RETURN p"
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
 		"latitude":            origin.Latitude,
 		"longitude":           origin.Longitude,
-		"maxWalkableDistance": MAX_WALKABLE_DISTANCE,
+		"maxWalkableDistance": maxWalkDistance,
 	}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
 	if err != nil {
 		slog.Error(err.Error())
@@ -367,17 +366,8 @@ func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, 
 		labels := node.Labels
 
 		if slices.Contains(labels, "Property") {
-			property := node.GetProperties()["name"]
-			properties = append(properties, models.Property{
-				Id:       node.GetProperties()["id"].(string),
-				Name:     property.(string),
-				District: node.GetProperties()["district"].(string),
-				Address:  node.GetProperties()["address"].(string),
-				Coordinates: models.Coordinate{
-					Latitude:  node.GetProperties()["coordinates"].([]float64)[0],
-					Longitude: node.GetProperties()["coordinates"].([]float64)[1],
-				},
-			})
+			property := nodeToProperty(node)
+			properties = append(properties, property)
 		}
 	}
 	return properties, nil
