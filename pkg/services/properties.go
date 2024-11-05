@@ -149,7 +149,6 @@ func (svc *PropertyService) FindNearestProperties(origin models.Coordinate, filt
 		property := svc.GetProperty(propertyId)
 
 		if (filter.MinPrice == 0 || property.RentalRange.FromPrice >= filter.MinPrice) && (filter.MaxPrice == 0 || property.RentalRange.FromPrice <= filter.MaxPrice) {
-			property.Distance = float64(nearestLocation.Dist)
 			nearestProperties = append(nearestProperties, property)
 		}
 	}
@@ -347,27 +346,39 @@ func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context,
 	return sortedByScore, nil
 }
 
-func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int) ([]models.Property, error) {
-	query := "MATCH (p:Property) WHERE point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) < $maxWalkableDistance RETURN p"
+func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int, page int, perPage int) ([]models.WalkableProperty, error) {
+	query := `MATCH (p:Property) 
+		WITH p, point.distance(p.location, point({latitude: $latitude, longitude: $longitude})) AS dist
+		WHERE dist < $maxWalkableDistance
+		ORDER BY dist
+		LIMIT $perPage
+		SKIP $offset
+		RETURN p, dist;`
 
 	results, err := neo4j.ExecuteQuery(ctx, svc.Neo4JClient.Client, query, map[string]any{
 		"latitude":            origin.Latitude,
 		"longitude":           origin.Longitude,
 		"maxWalkableDistance": maxWalkDistance,
+		"offset":              (page - 1) * perPage,
+		"perPage":             perPage,
 	}, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
 	if err != nil {
 		slog.Error(err.Error())
 		return nil, err
 	}
 
-	properties := make([]models.Property, 0)
+	properties := make([]models.WalkableProperty, 0)
 	for _, record := range results.Records {
 		node := record.AsMap()["p"].(dbtype.Node)
+		walkDistance, _ := record.Get("dist")
 		labels := node.Labels
 
 		if slices.Contains(labels, "Property") {
 			property := nodeToProperty(node)
-			properties = append(properties, property)
+			properties = append(properties, models.WalkableProperty{
+				Property:     property,
+				WalkDistance: walkDistance.(float64),
+			})
 		}
 	}
 	return properties, nil

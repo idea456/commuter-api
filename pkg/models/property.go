@@ -21,7 +21,11 @@ type Property struct {
 	RentalRange RentalRange `json:"rentalRange" bson:"rentalRange"`
 	Type        string      `json:"type" bson:"type"`
 	Coordinates Coordinate  `json:"coordinates" bson:"coordinates"`
-	Distance    float64     `json:"distance"`
+}
+
+type WalkableProperty struct {
+	Property     Property `json:"property"`
+	WalkDistance float64  `json:"walk_distance"`
 }
 
 type TransitableProperty struct {

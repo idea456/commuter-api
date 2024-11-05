@@ -18,6 +18,14 @@ type GetWalkablePropertiesRequest struct {
 	Radius   float64           `json:"radius"`
 }
 
+// type GetWalkablePropertiesResponse struct {
+// 	Items []models.WalkableProperty `json:"items"`
+// 	Page  int                       `json:"page"`
+// 	Count int                       `json:"count"`
+// }
+
+type GetWalkablePropertiesResponse = []models.WalkableProperty
+
 type GetTransitablePropertiesRequest struct {
 	Origin   models.Coordinate `json:"origin"`
 	MinPrice float64           `json:"min_price"`
@@ -71,7 +79,29 @@ func (ctl *PropertiesController) GetWalkableProperties(w http.ResponseWriter, r 
 		maxWalkDistance = maxWalkDistanceQuery
 	}
 
-	properties, err := ctl.propertySvc.FindWalkablePropertiesByOrigin(r.Context(), models.Coordinate{Latitude: latitude, Longitude: longitude}, maxWalkDistance)
+	page := 1
+	pageStr := r.URL.Query().Get("page")
+	if pageStr != "" {
+		pageInt, err := strconv.Atoi(pageStr)
+		if err != nil {
+			http.Error(w, "page must be a number", http.StatusBadRequest)
+			return
+		}
+		page = pageInt
+	}
+
+	perPage := 20
+	perPageStr := r.URL.Query().Get("per_page")
+	if perPageStr != "" {
+		perPageInt, err := strconv.Atoi(perPageStr)
+		if err != nil {
+			http.Error(w, "per_page must be a number", http.StatusBadRequest)
+			return
+		}
+		perPage = perPageInt
+	}
+
+	properties, err := ctl.propertySvc.FindWalkablePropertiesByOrigin(r.Context(), models.Coordinate{Latitude: latitude, Longitude: longitude}, maxWalkDistance, page, perPage)
 	if err != nil {
 		http.Error(w, "TODO", http.StatusNotFound)
 	}
