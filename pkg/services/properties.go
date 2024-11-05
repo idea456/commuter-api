@@ -347,7 +347,7 @@ func (svc *PropertyService) FindTransitablePropertiesByStop(ctx context.Context,
 	return sortedByScore, nil
 }
 
-func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate) ([]models.Property, error) {
+func (svc *PropertyService) FindWalkablePropertiesByOrigin(ctx context.Context, origin models.Coordinate, maxWalkDistance int) ([]models.Property, error) {
 	MAX_WALKABLE_DISTANCE := 1000
 	query := "MATCH (p:Property) WHERE point.distance(p.location, point({latitude:$latitude, longitude:$longitude})) < $maxWalkableDistance RETURN p"
 

@@ -83,6 +83,78 @@ func (g *Seeder) SeedStops(ctx context.Context) error {
 	return nil
 }
 
+func (g *Seeder) SeedTransfers(ctx context.Context) {
+	file, err := os.Open("pkg/static/gtfs_rapid_rail_kl/stops.txt")
+	if err != nil {
+		slog.Error(err.Error())
+		return
+	}
+	defer file.Close()
+
+	r := csv.NewReader(file)
+	data, err := r.ReadAll()
+	if err != nil {
+		slog.Error(err.Error())
+		return
+	}
+
+	mapping := make(map[string][]models.Stop)
+
+	for i, row := range data {
+		if i > 0 {
+			name := row[1]
+			stop := models.Stop{
+				Id:          []string{row[0]},
+				DisplayName: row[9],
+				Name:        row[1],
+			}
+			if _, exists := mapping[name]; exists {
+				mapping[name] = append(mapping[name], stop)
+			} else {
+				mapping[name] = []models.Stop{stop}
+			}
+		}
+	}
+
+	for _, stops := range mapping {
+		if len(stops) > 1 {
+			// query := "MATCH "
+			// take a pivot stop, and create bidirectional relationships to all other stops
+			pivotStop := stops[0]
+			for i := 1; i < len(stops); i++ {
+				endStop := stops[i]
+				// fmt.Printf("%s to %s\n", pivotStop.Id, endStop.Id)
+				query := "MATCH (start:Stop {stop_id: $start_stop_id}), (end:Stop {stop_id: $end_stop_id}) CREATE (start)-[:TRANSFER {duration: $duration}]->(end);"
+				parameters := map[string]any{
+					"start_stop_id": pivotStop.Id[0],
+					"end_stop_id":   endStop.Id[0],
+					"duration":      60, // NOTE: Hardcoding this for now and assuming transfers cost 60 seconds
+				}
+
+				// fmt.Printf("MATCH (start:Stop {stop_id: '%s'}), (end:Stop {stop_id: '%s'}) CREATE (start)-[:TRANSFER {duration: %d}]->(end);\n", pivotStop.Id, endStop.Id, 60)
+
+				_, err = neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
+				if err != nil {
+					slog.Error(fmt.Sprintf("unable to merge stops: %v", err))
+					continue
+				}
+
+				// Create the opposite relationship as well
+				parameters = map[string]any{
+					"start_stop_id": endStop.Id[0],
+					"end_stop_id":   pivotStop.Id[0],
+					"duration":      60, // NOTE: Hardcoding this for now and assuming transfers cost 60 seconds
+				}
+				_, err = neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
+				if err != nil {
+					slog.Error(fmt.Sprintf("unable to merge stops: %v", err))
+					continue
+				}
+			}
+		}
+	}
+}
+
 func (g *Seeder) MergeSimilarStops(ctx context.Context) {
 	file, err := os.Open("pkg/static/gtfs_rapid_rail_kl/stops.txt")
 	if err != nil {
@@ -370,12 +442,13 @@ func (g *Seeder) SeedNearbyStops(ctx context.Context, distance int) error {
 			}
 			slog.Info(fmt.Sprintf("Matching nearest stop %s to property %s...", nearestStop.Name, property.Name))
 
-			query := "MATCH (p:Property {name: $property_name}), (s:Stop {name:$stop_name}) CREATE (p)-[:NEARBY { walk_distance: $walk_distance, walk_time: $walk_time }]->(s);"
+			query := "MATCH (p:Property {name: $property_name}), (s:Stop {name:$stop_name}) CREATE (p)-[:NEARBY { walk_distance: $walk_distance, walk_time: $walk_time, duration: $duration }]->(s);"
 			parameters := map[string]any{
 				"property_name": property.Name,
 				"walk_distance": directions.Itineraries[0].WalkDistance,
 				"walk_time":     directions.Itineraries[0].WalkTime,
 				"stop_name":     nearestStop.Name,
+				"duration":      directions.Itineraries[0].WalkTime,
 			}
 			_, err := neo4j.ExecuteQuery(ctx, g.client.Client, query, parameters, neo4j.EagerResultTransformer, neo4j.ExecuteQueryWithDatabase("neo4j"))
 			if err != nil {

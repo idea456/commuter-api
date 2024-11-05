@@ -21,7 +21,8 @@ func main() {
 	seeder.DropDatabase(ctx)
 	seeder.SeedStops(ctx)
 	seeder.SeedTrips(ctx)
-	seeder.MergeSimilarStops(ctx)
+	seeder.SeedTransfers(ctx)
+	// seeder.MergeSimilarStops(ctx)
 	seeder.SeedProperties(ctx)
 	seeder.SeedNearbyStops(ctx, 500)
 }

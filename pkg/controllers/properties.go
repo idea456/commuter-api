@@ -42,14 +42,36 @@ func (ctrl *PropertiesController) GetProperty(w http.ResponseWriter, r *http.Req
 }
 
 func (ctl *PropertiesController) GetWalkableProperties(w http.ResponseWriter, r *http.Request) {
-	var body GetWalkablePropertiesRequest
-	err := json.NewDecoder(r.Body).Decode(&body)
-	if err != nil {
-		http.Error(w, "Invalid argument", http.StatusBadRequest)
+	latitudeStr := r.URL.Query().Get("latitude")
+	longitudeStr := r.URL.Query().Get("longitude")
+	if latitudeStr == "" || longitudeStr == "" {
+		http.Error(w, "Please specify latitude and longitude.", http.StatusBadRequest)
 		return
 	}
 
-	properties, err := ctl.propertySvc.FindWalkablePropertiesByOrigin(r.Context(), body.Origin)
+	latitude, err := strconv.ParseFloat(latitudeStr, 64)
+	if err != nil {
+		http.Error(w, "latitude must be a float", http.StatusBadRequest)
+		return
+	}
+	longitude, err := strconv.ParseFloat(longitudeStr, 64)
+	if err != nil {
+		http.Error(w, "longitude must be a float", http.StatusBadRequest)
+		return
+	}
+
+	maxWalkDistance := 1000
+	maxWalkDistanceStr := r.URL.Query().Get("walk_distance")
+	if maxWalkDistanceStr != "" {
+		maxWalkDistanceQuery, err := strconv.Atoi(maxWalkDistanceStr)
+		if err != nil {
+			http.Error(w, "walk_distance must be a number in metres", http.StatusBadRequest)
+			return
+		}
+		maxWalkDistance = maxWalkDistanceQuery
+	}
+
+	properties, err := ctl.propertySvc.FindWalkablePropertiesByOrigin(r.Context(), models.Coordinate{Latitude: latitude, Longitude: longitude}, maxWalkDistance)
 	if err != nil {
 		http.Error(w, "TODO", http.StatusNotFound)
 	}
