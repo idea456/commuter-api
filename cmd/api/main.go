@@ -13,8 +13,6 @@ func health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-
-
 // func rateLimiter(next func(w http.ResponseWriter, r *http.Request) http.Handler {
 // 	limiter := rate.NewLimiter(20, 4)
 // })
@@ -38,8 +36,8 @@ func main() {
 
 	handler := cors.Default().Handler(mux)
 
-	fmt.Println("Listening at port 4001...")
-	err = http.ListenAndServe(":4001", handler)
+	fmt.Println("Listening at port 80...")
+	err = http.ListenAndServe(":80", handler)
 	if err != nil {
 		log.Fatal(err)
 	}

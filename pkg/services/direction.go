@@ -86,7 +86,6 @@ func (svc *DirectionService) GetDirections(origin models.Coordinate, destination
 	}
 	`, origin.Latitude, origin.Longitude, destination.Latitude, destination.Longitude, transportModes)
 
-	fmt.Println(query)
 	response, err := svc.graphqlClient.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("cant get directions: %v", err)
